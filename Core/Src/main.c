@@ -113,7 +113,7 @@ void StartDefaultTask(void *argument);
 /* USER CODE BEGIN 0 */
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 {
-  UARTTxDone=1;  // завершение отправки по UART
+  UARTTxDone=1;  // завершение отправки по UART. Если нужен завершающий 0, можно дослать его отсюда
 }
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
@@ -264,7 +264,7 @@ int main(void)
 
   /* USER CODE BEGIN RTOS_QUEUES */
   /* add queues, ... */
-   SPIQueue=xQueueCreate(10,sizeof(pToSPI));
+   SPIQueue=xQueueCreate(10,sizeof(pToSPI));//Это две наши очереди
    UARTQueue=xQueueCreate(10,sizeof(pToUART));
   /* USER CODE END RTOS_QUEUES */
 
@@ -274,7 +274,7 @@ int main(void)
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
-  SPITaskHandle = osThreadNew(StartSPITask, NULL, &SPITask_attributes);
+  SPITaskHandle = osThreadNew(StartSPITask, NULL, &SPITask_attributes);//А это два потока 
   UARTTaskHandle = osThreadNew(StartUARTTask, NULL, &UARTTask_attributes);
   /* USER CODE END RTOS_THREADS */
 
@@ -522,9 +522,9 @@ void StartDefaultTask(void *argument)
   /* Infinite loop */
   for(;;)
   {
-    osDelay(500);
-    HAL_GPIO_WritePin(GPIOE,GPIO_PIN_0,GPIO_PIN_SET);//выключили
-    HAL_GPIO_WritePin(GPIOE,GPIO_PIN_1,GPIO_PIN_SET);//выключили
+    osDelay(500);//здесь можно организовать счетчик времени, загрузки процессора, проверки и т.д.
+    HAL_GPIO_WritePin(GPIOE,GPIO_PIN_0,GPIO_PIN_SET);//выключили 
+    HAL_GPIO_WritePin(GPIOE,GPIO_PIN_1,GPIO_PIN_SET);//выключили индикаторы
   }
   /* USER CODE END 5 */
 }

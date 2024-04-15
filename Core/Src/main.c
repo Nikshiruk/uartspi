@@ -117,65 +117,67 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 }
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
+// зацикленный поток - прием байта по UART  
       if (ToSPIBuf[ToSPIPos])
-      {
-         ToSPIPos++; if (ToSPIPos>=ToSPIBufL) ToSPIPos=0;
-         (*pToSPI)++;
+      {//если принятый байт ненулевой (не конец фрейма)
+         ToSPIPos++; if (ToSPIPos>=ToSPIBufL) ToSPIPos=0;//перемещаемся к следующему байту в кольцевом буфере
+         (*pToSPI)++;//увеличиваем длину текущего фрейма
       } else if (*pToSPI)
-        {
-           xQueueSendFromISR(SPIQueue, (void*)&pToSPI, 0);
-           pToSPI=(uint16_t*)&ToSPIBuf[ToSPIPos];
-           ToSPIPos+=2; if (ToSPIPos>=ToSPIBufL) ToSPIPos=0;
-           *pToSPI=0;
+        {//иначе (принят 0) если до этого приняли данные
+           xQueueSendFromISR(SPIQueue, (void*)&pToSPI, 0);//помещаем в очередь указатель на количество принятых байт данных
+           pToSPI=(uint16_t*)&ToSPIBuf[ToSPIPos];//начало нового фрейма. Даже если до конца буфера один байт - длину не разрываем
+           ToSPIPos+=2; if (ToSPIPos>=ToSPIBufL) ToSPIPos=0;//можно сразу на 2 сместить указатель на данные, так как неразорванный буфер в конце буфера
+           *pToSPI=0;//начинаем подсчет длины нового фрейма
         }
-      HAL_UART_Receive_DMA(&huart1,&ToSPIBuf[ToSPIPos],1);
+      HAL_UART_Receive_DMA(&huart1,&ToSPIBuf[ToSPIPos],1);//принимаем дальше
 }
 
 void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi) 
 {
-//  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_SET);
+//  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_SET);//для "программного" NSS
+  //это зацикленный прием/передача буферов SPI
   for (uint8_t i=0; i<SPITxRxBufL;i++) 
-  {
+  {//перебираем все принятые байты
     if (*pToUART&&!SPIRxBuf[i]) 
-    {
-      xQueueSendFromISR(UARTQueue, (void*)&pToUART, 0);
-      pToUART=(uint16_t*)&ToUARTBuf[ToUARTPos];
-      *pToUART=0;
-      ToUARTPos++; if (ToUARTPos>=ToUARTBufL) ToUARTPos=0;
-      ToUARTPos++; if (ToUARTPos>=ToUARTBufL) ToUARTPos=0;
+    {//если ранее принимали фрейм - есть длина, но пришел 0
+      xQueueSendFromISR(UARTQueue, (void*)&pToUART, 0);//отправляем фрейм в очередь
+      pToUART=(uint16_t*)&ToUARTBuf[ToUARTPos];//перемещаем в буфере начало следующего фрейма, если 2 байта длины в конце буфера - не разрываем
+      *pToUART=0;//сначала длина нового фрейма 0
+      ToUARTPos+=2; if (ToUARTPos>=ToUARTBufL) ToUARTPos=0;//двубайтная длина буфера не разорвана, старшие разряды в "запасном" байте в конце буфера, данные в начале 
+      
     } else if (SPIRxBuf[i]) 
-      {
-        ToUARTBuf[ToUARTPos]=SPIRxBuf[i];
-        (*pToUART)++;
-        ToUARTPos++; if (ToUARTPos>=ToUARTBufL) ToUARTPos=0;          
-      } 
+      {//не важно, первый или последующий байт фрейма 
+        ToUARTBuf[ToUARTPos]=SPIRxBuf[i];//- просто складываем его в буфер, перемещая позицию 
+        (*pToUART)++;//и учитывая длину
+        ToUARTPos++; if (ToUARTPos>=ToUARTBufL) ToUARTPos=0; //не забываем проверить, не в конце ли мы кольца         
+      } //разобрали принятое
     if (SPITxTail) 
-    {
-       SPITxBuf[i]=ToSPIBuf[SPITxPos];
-       SPITxPos++; if (SPITxPos>=ToSPIBufL) SPITxPos=0;
-       SPITxTail--;
-    } else SPITxBuf[i]=0;
+    {//если отправляем фрейм 
+       SPITxBuf[i]=ToSPIBuf[SPITxPos];//переносим данные из кольцевого буфера в буфер отправки SPI
+       SPITxPos++; if (SPITxPos>=ToSPIBufL) SPITxPos=0;// если отправляемая позиция - конец кольца, продолжим отправку из начала кольца
+       SPITxTail--;//1байт перенесли - остаток уменьшили
+    } else SPITxBuf[i]=0;//нечего отправлять - отправим 0 (он же и конец фрейма)
   }
   //HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_RESET);
-  HAL_SPI_TransmitReceive_DMA(&hspi1,SPITxBuf,SPIRxBuf,SPITxRxBufL);
+  HAL_SPI_TransmitReceive_DMA(&hspi1,SPITxBuf,SPIRxBuf,SPITxRxBufL);//зацикливаем прием/передачу SPI
 }
 
 void StartSPITask(void *argument)
 {
-  pToUART=(uint16_t*)&ToUARTBuf[0];
-  *pToUART=0;
-  ToUARTPos=2;
-  //HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_RESET);
-  HAL_SPI_TransmitReceive_DMA(&hspi1,SPITxBuf,SPIRxBuf,SPITxRxBufL);
+  pToUART=(uint16_t*)&ToUARTBuf[0];//указатель с длиной фрейма - в начале буфера
+  *pToUART=0;//пока данных нет
+  ToUARTPos=2;//данные пойдут сюда
+  //HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_RESET);//"программный NSS"
+  HAL_SPI_TransmitReceive_DMA(&hspi1,SPITxBuf,SPIRxBuf,SPITxRxBufL);// запускаем прием/передачу SPI
   for(;;) 
   {
      if(SPIQueue&&!SPITxTail) 
-     {
+     {//если есть очередь и ничего не передаем
         if(xQueueReceive(SPIQueue, &(pQRSPI), 100/portTICK_RATE_MS)==pdTRUE) 
-        {
-           SPITxTail=*pQRSPI;
-           SPITxPos+=2; 
-           HAL_GPIO_WritePin(GPIOE,GPIO_PIN_0,GPIO_PIN_RESET);//
+        {//приняли указатель на фрейм
+           SPITxTail=*pQRSPI;//остаток перед передачей - длина фрейма
+           SPITxPos+=2; //"пропускаем длину"
+           HAL_GPIO_WritePin(GPIOE,GPIO_PIN_0,GPIO_PIN_RESET);//зажигаем лампочку
         }
      } else osDelay(10);
   }
@@ -190,12 +192,12 @@ void StartUARTTask(void *argument)
   for(;;) 
   {
      if(UARTQueue&&UARTTxDone) 
-     {
+     {//если и очередь есть и данные переданы
         if(xQueueReceive(UARTQueue, &(pQRUART), 100/portTICK_RATE_MS)==pdTRUE) 
         {
-           UARTTxDone=0;
-           HAL_UART_Transmit_DMA(&huart1,(uint8_t*)(pQRUART+1),*pQRUART);
-           HAL_GPIO_WritePin(GPIOE,GPIO_PIN_1,GPIO_PIN_RESET);//
+           UARTTxDone=0;//снимаем флаг готовности к передаче
+           HAL_UART_Transmit_DMA(&huart1,(uint8_t*)(pQRUART+1),*pQRUART);//передача по UARTю Как насчет "0" в конце?
+           HAL_GPIO_WritePin(GPIOE,GPIO_PIN_1,GPIO_PIN_RESET);//зажигаем индикатор очереди UART
         }
      } else osDelay(10);
   }
